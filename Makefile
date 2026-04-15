@@ -5,6 +5,7 @@ PYTHON3 ?= python3
 ROOT := $(CURDIR)
 
 OPTEE_OS_PATH       := $(ROOT)/optee_os
+FTPM_BENCH_TA_PATH  := $(ROOT)/optee_examples/ftpm_bench/ta
 
 OPTEE_OS_OUT        := $(OPTEE_OS_PATH)/out/riscv
 
@@ -19,6 +20,8 @@ COMPILE_S_KERNEL    := 64
 OPTEE_OS_TA_DEV_KIT_DIR := $(OPTEE_OS_OUT)/export-ta_rv64
 
 OPTEE_OS_BIN        := $(OPTEE_OS_OUT)/core/tee.bin
+FTPM_BENCH_TA_UUID  := d96a5b4c-e3f2-4817-a695-0b1c2d3e4f50
+FTPM_BENCH_TA_ELF   := $(FTPM_BENCH_TA_PATH)/out/$(FTPM_BENCH_TA_UUID).stripped.elf
 
 OPTEE_OS_PLATFORM   ?= jupiter
 
@@ -51,9 +54,17 @@ OPTEE_OS_PLATFORM_FLAGS := \
 	CFG_TDDRAM_SIZE=0x01000000
 
 CFG_IN_TREE_EARLY_TAS := trusted_keys/f04a0fe7-1f5d-4b9b-abf7-619b85b4ce8c
+OPTEE_OS_EARLY_TA_FLAGS := EARLY_TA_PATHS="$(FTPM_BENCH_TA_ELF)"
+
+FTPM_BENCH_TA_FLAGS := \
+	CROSS_COMPILE="$(CCACHE)$(CROSS_COMPILE)" \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	PYTHON3=$(PYTHON3) \
+	O=out
 
 
-.PHONY: all clean optee-os optee-os-devkit check-python-deps
+.PHONY: all clean optee-os optee-os-core optee-os-devkit ftpm-bench-ta \
+	check-python-deps
 
 all: optee-os
 
@@ -67,15 +78,18 @@ check-python-deps:
 		 echo "Please install it with: pip3 install pyelftools" && \
 		 exit 1)
 
-optee-os: check-python-deps optee-os-devkit
-	@echo "Building OP-TEE OS..."
+optee-os: optee-os-core optee-os-devkit
+
+optee-os-core: ftpm-bench-ta
+	@echo "Building OP-TEE OS with ftpm_bench as early TA..."
 	$(MAKE) -C $(OPTEE_OS_PATH) \
 		$(OPTEE_OS_COMMON_FLAGS) \
 		$(OPTEE_OS_PLATFORM_FLAGS) \
+		$(OPTEE_OS_EARLY_TA_FLAGS) \
 		CFG_IN_TREE_EARLY_TAS="$(CFG_IN_TREE_EARLY_TAS)"
 	@echo "OP-TEE OS build complete: $(OPTEE_OS_BIN)"
 
-optee-os-devkit: check-python-deps optee-os
+optee-os-devkit: check-python-deps
 	@echo "Building OP-TEE OS TA development kit..."
 	$(MAKE) -C $(OPTEE_OS_PATH) \
 		$(OPTEE_OS_COMMON_FLAGS) \
@@ -84,6 +98,12 @@ optee-os-devkit: check-python-deps optee-os
 		ta_dev_kit
 	@echo "TA dev kit built: $(OPTEE_OS_TA_DEV_KIT_DIR)"
 
+ftpm-bench-ta: optee-os-devkit
+	@echo "Building ftpm_bench TA for early TA embedding..."
+	$(MAKE) -C $(FTPM_BENCH_TA_PATH) $(FTPM_BENCH_TA_FLAGS)
+	@echo "ftpm_bench TA built: $(FTPM_BENCH_TA_ELF)"
+
 clean:
 	$(MAKE) -C $(OPTEE_OS_PATH) $(OPTEE_OS_COMMON_FLAGS) clean || true
 	rm -rf $(OPTEE_OS_OUT)
+	rm -rf $(FTPM_BENCH_TA_PATH)/out
