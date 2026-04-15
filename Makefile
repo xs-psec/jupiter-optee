@@ -6,6 +6,7 @@ ROOT := $(CURDIR)
 
 OPTEE_OS_PATH       := $(ROOT)/optee_os
 OPTEE_FTPM_PATH     := $(ROOT)/optee_ftpm
+FTPM_BENCH_TA_PATH  := $(ROOT)/optee_examples/ftpm_bench/ta
 MS_TPM_20_REF_PATH  := $(ROOT)/ms-tpm-20-ref
 
 OPTEE_OS_OUT        := $(OPTEE_OS_PATH)/out/riscv
@@ -23,6 +24,9 @@ OPTEE_OS_TA_DEV_KIT_DIR := $(OPTEE_OS_OUT)/export-ta_rv64
 OPTEE_OS_BIN        := $(OPTEE_OS_OUT)/core/tee.bin
 
 FTPM_TA_UUID        := bc50d971-d4c9-42c4-82cb-343fb7f37896
+FTPM_BENCH_TA_UUID  := a7b8c9d0-e1f2-4a5b-8c6d-7e8f9a0b1c2d
+OPTEE_FTPM_TA_ELF   := $(OPTEE_FTPM_PATH)/out/$(FTPM_TA_UUID).stripped.elf
+FTPM_BENCH_TA_ELF   := $(FTPM_BENCH_TA_PATH)/out/$(FTPM_BENCH_TA_UUID).stripped.elf
 
 OPTEE_OS_PLATFORM   ?= jupiter
 
@@ -30,9 +34,6 @@ DEBUG               ?= 0
 
 MEASURED_BOOT_FTPM  ?= y
 
-################################################################################
-# OP-TEE OS build flags
-################################################################################
 OPTEE_OS_COMMON_FLAGS := \
 	ARCH=$(ARCH) \
 	PLATFORM=$(OPTEE_OS_PLATFORM) \
@@ -60,9 +61,6 @@ OPTEE_OS_PLATFORM_FLAGS := \
 
 CFG_IN_TREE_EARLY_TAS := trusted_keys/f04a0fe7-1f5d-4b9b-abf7-619b85b4ce8c
 
-################################################################################
-# fTPM build flags
-################################################################################
 FTPM_FLAGS := \
 	CROSS_COMPILE="$(CCACHE)$(CROSS_COMPILE)" \
 	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
@@ -71,17 +69,17 @@ FTPM_FLAGS := \
 	$(if $(filter 1,$(DEBUG)),CFG_TA_DEBUG=y) \
 	O=out
 
-################################################################################
-# Targets
-################################################################################
-.PHONY: all clean optee-os optee-os-devkit ftpm check-python-deps
+FTPM_BENCH_TA_FLAGS := \
+	CROSS_COMPILE="$(CCACHE)$(CROSS_COMPILE)" \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	PYTHON3=$(PYTHON3) \
+	O=out
+
+.PHONY: all clean optee-os optee-os-devkit ftpm ftpm-bench-ta \
+	check-python-deps
 
 all: optee-os
 
-################################################################################
-# Check Python dependencies
-# OP-TEE's scripts require cryptography and pyelftools modules
-################################################################################
 check-python-deps:
 	@$(PYTHON3) -c "import cryptography" 2>/dev/null || \
 		(echo "ERROR: Python 'cryptography' module is required but not installed." && \
@@ -92,14 +90,11 @@ check-python-deps:
 		 echo "Please install it with: pip3 install pyelftools" && \
 		 exit 1)
 
-################################################################################
-# OP-TEE OS
-################################################################################
 ifeq ($(MEASURED_BOOT_FTPM),y)
-OPTEE_OS_EARLY_TA_FLAGS := EARLY_TA_PATHS=$(OPTEE_FTPM_PATH)/out/$(FTPM_TA_UUID).stripped.elf
+OPTEE_OS_EARLY_TA_FLAGS := EARLY_TA_PATHS="$(OPTEE_FTPM_TA_ELF) $(FTPM_BENCH_TA_ELF)"
 
-optee-os: ftpm
-	@echo "Building OP-TEE OS with fTPM as early TA..."
+optee-os: ftpm ftpm-bench-ta
+	@echo "Building OP-TEE OS with fTPM and ftpm_bench as early TA..."
 	$(MAKE) -C $(OPTEE_OS_PATH) \
 		$(OPTEE_OS_COMMON_FLAGS) \
 		$(OPTEE_OS_PLATFORM_FLAGS) \
@@ -116,10 +111,6 @@ optee-os:
 	@echo "OP-TEE OS build complete: $(OPTEE_OS_BIN)"
 endif
 
-################################################################################
-# OP-TEE OS TA Development Kit
-# This is built first, then used to compile TAs (including fTPM)
-################################################################################
 optee-os-devkit: check-python-deps
 	@echo "Building OP-TEE OS TA development kit..."
 	$(MAKE) -C $(OPTEE_OS_PATH) \
@@ -129,23 +120,25 @@ optee-os-devkit: check-python-deps
 		ta_dev_kit
 	@echo "TA dev kit built: $(OPTEE_OS_TA_DEV_KIT_DIR)"
 
-################################################################################
-# fTPM TA
-# Requires optee-os-devkit to be built first
-################################################################################
 ftpm: optee-os-devkit
 ifeq ($(MEASURED_BOOT_FTPM),y)
 	@echo "Building fTPM TA..."
 	$(MAKE) -C $(OPTEE_FTPM_PATH) $(FTPM_FLAGS)
-	@echo "fTPM TA built: $(OPTEE_FTPM_PATH)/out/$(FTPM_TA_UUID).stripped.elf"
+	@echo "fTPM TA built: $(OPTEE_FTPM_TA_ELF)"
 else
 	@echo "fTPM is disabled (MEASURED_BOOT_FTPM != y)"
 endif
 
-################################################################################
-# Clean targets
-################################################################################
-clean: optee-os-clean ftpm-clean
+ftpm-bench-ta: optee-os-devkit
+ifeq ($(MEASURED_BOOT_FTPM),y)
+	@echo "Building ftpm_bench TA for early TA embedding..."
+	$(MAKE) -C $(FTPM_BENCH_TA_PATH) $(FTPM_BENCH_TA_FLAGS)
+	@echo "ftpm_bench TA built: $(FTPM_BENCH_TA_ELF)"
+else
+	@echo "ftpm_bench early TA is disabled (MEASURED_BOOT_FTPM != y)"
+endif
+
+clean: optee-os-clean ftpm-clean ftpm-bench-ta-clean
 
 optee-os-clean:
 	$(MAKE) -C $(OPTEE_OS_PATH) $(OPTEE_OS_COMMON_FLAGS) clean || true
@@ -156,3 +149,6 @@ ifeq ($(MEASURED_BOOT_FTPM),y)
 	$(MAKE) -C $(OPTEE_FTPM_PATH) $(FTPM_FLAGS) clean || true
 	rm -rf $(OPTEE_FTPM_PATH)/out
 endif
+
+ftpm-bench-ta-clean:
+	rm -rf $(FTPM_BENCH_TA_PATH)/out
