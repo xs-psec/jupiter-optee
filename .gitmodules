@@ -9,7 +9,7 @@
 [submodule "optee_examples"]
 	path = optee_examples
 	url = https://github.com/fetch150zy/optee_examples.git
-	branch = jupiter/optee
+	branch = ftpm-bench
 [submodule "optee_ftpm"]
 	path = optee_ftpm
 	url = git@github.com:fetch150zy/optee_ftpm.git
